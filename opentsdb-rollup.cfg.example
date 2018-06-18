@@ -1,0 +1,5 @@
+title = "OpenTSDB Rollup"
+
+[opentsdb]
+read_servers  = ["arch1.lab5.defense.net","arch4.lab5.defense.net"]
+rollup_servers = ["arch3.lab5.defense.net"]
