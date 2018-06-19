@@ -14,9 +14,9 @@ ReadEndpoint  = [
 SuggestMax    = "3000"
 LookupLimit   = "20000"
 LookupUseMeta = "true"
-NoOfWorkers   = 100
+NoOfWorkers   = 10
 
 [metric]
 List = [
-  "os.cpu"
+  "linux.loadavg_1_min"
   ]

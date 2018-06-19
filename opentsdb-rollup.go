@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -12,25 +11,36 @@ import (
 )
 
 // GetMetrics search metric names from suggest api call
-func GetMetrics(q string, config tomlConfig) []string {
-	resp, err := resty.R().
-		SetQueryParams(map[string]string{
-			"type": "metrics",
-			"max":  config.API.SuggestMax,
-			"q":    q,
-		}).
-		Get(config.Servers.ReadEndpoint[0] + "/api/suggest")
-	if err != nil {
-		panic(err)
-	}
+func GetMetrics(config tomlConfig) []string {
 	var metriclist []string
-	json.Unmarshal(resp.Body(), &metriclist)
-	//fmt.Printf("metriclist1: %v\n", metriclist)
+	for _, metric := range config.Metric.List {
+		resp, err := resty.R().
+			SetQueryParams(map[string]string{
+				"type": "metrics",
+				"max":  config.API.SuggestMax,
+				"q":    metric,
+			}).
+			Get(config.Servers.ReadEndpoint[0] + "/api/suggest")
+		if err != nil {
+			panic(err)
+		}
+		var ml []string
+		json.Unmarshal(resp.Body(), &ml)
+
+		for _, m := range ml {
+			metriclist = append(metriclist, m)
+		}
+	}
+
 	return metriclist
+
 }
 
 // GetTSList gets timeseries list
-func GetTSList(metric string, config tomlConfig) *Lookup {
+func GetTSList(metric string, config tomlConfig) [][]string {
+
+	var ts [][]string
+
 	resp, err := resty.R().
 		SetResult(&Lookup{}).
 		SetQueryParams(map[string]string{
@@ -43,12 +53,29 @@ func GetTSList(metric string, config tomlConfig) *Lookup {
 		panic(err)
 	}
 	tslist := resp.Result().(*Lookup)
-	fmt.Printf("tslist: %v \n", tslist)
-	return tslist
+	//fmt.Printf("tslist: %v \n", tslist)
+
+	batch := 20
+	for i := 0; i < len(tslist.Results); i += batch {
+		var k []string
+		j := i + batch
+		if j > len(tslist.Results) {
+			j = len(tslist.Results)
+		}
+		//fmt.Printf("tslist.Results[%v:%v]\n", i, j)
+		for _, t := range tslist.Results[i:j] {
+			//fmt.Printf("t %v\n", string(t.Tsuid))
+			k = append(k, string(t.Tsuid))
+		}
+		ts = append(ts, k)
+	}
+
+	return ts
+
 }
 
 // GetRollup get rollup datapoints for time series
-func GetRollup(url []string, tsuid []string, endTime int64, startTime int64) *QueryRespItem {
+func GetRollup(tsuid []string, endTime int64, startTime int64, config tomlConfig) []Rollup {
 
 	var jsondata Query
 	var queries SubQuery
@@ -67,34 +94,24 @@ func GetRollup(url []string, tsuid []string, endTime int64, startTime int64) *Qu
 	resp, err := resty.R().
 		SetResult(&QueryRespItem{}).
 		SetBody(jsondata).
-		Post(url[0] + "/api/query")
+		Post(config.Servers.ReadEndpoint[0] + "/api/query")
 	if err != nil {
 		panic(err)
 	}
-	//fmt.Printf("GetRollup, %v, %v, %v, %v\n", url[0], tsuid, endTime, startTime)
+	//fmt.Printf("GetRollup, %v, %v, %v, %v\n", config.Servers.ReadEndpoint[0], tsuid, endTime, startTime)
 	result := resp.Result().(*QueryRespItem)
-	return result
-}
 
-// PostRollup send rollup datapoints for time series
-func PostRollup(url string, data Rollup) interface{} {
-	resp, err := resty.R().
-		SetBody(data).
-		Post(url + "/api/rollup?details")
-	if err != nil {
-		panic(err)
-	}
-
-	return resp.StatusCode()
+	return convertRollup(result)
 }
 
 // convertRollup takes aggregated rollup data and formated it for posting to rollup api
 func convertRollup(in *QueryRespItem) []Rollup {
 	var test Rollup
 	var result []Rollup
+	a := len(*in) / 2
 	for i, item := range *in {
 		agg := "SUM"
-		if i == 1 {
+		if i < a {
 			agg = "COUNT"
 		}
 		for dps, value := range item.Dps {
@@ -110,152 +127,63 @@ func convertRollup(in *QueryRespItem) []Rollup {
 	return result
 }
 
-// channels
-var tsjobs = make(chan string, 10)
-var tsresults = make(chan []string, 10)
-var rujobs = make(chan []string, 10)
-var ruresults = make(chan *QueryRespItem, 10)
-var pjobs = make(chan Rollup, 10)
-var presults = make(chan interface{}, 10)
+// PostRollup send rollup datapoints for time series
+func PostRollup(data Rollup, config tomlConfig) interface{} {
+	resp, err := resty.R().
+		SetBody(data).
+		Post(config.Servers.WriteEndpoint + "/api/rollup")
+	if err != nil {
+		fmt.Printf("rest error: %v", err)
+	}
+	return resp.StatusCode()
+}
 
-func tscreateWorkerPool(config tomlConfig) {
-	var wg sync.WaitGroup
-	for i := 0; i < config.API.NoOfWorkers; i++ {
-		wg.Add(1)
-		go tsworker(&wg, config)
-	}
-	wg.Wait()
-	close(tsresults)
+type Job struct {
+	id   int
+	data Rollup
 }
-func rucreateWorkerPool(config tomlConfig, endTime int64, startTime int64) {
-	var wg sync.WaitGroup
-	for i := 0; i < config.API.NoOfWorkers; i++ {
-		wg.Add(1)
-		go ruworker(&wg, config, startTime, endTime)
-	}
-	wg.Wait()
-	close(ruresults)
+type Result struct {
+	job    Job
+	status interface{}
 }
-func pcreateWorkerPool(config tomlConfig) {
-	var wg sync.WaitGroup
-	for i := 0; i < config.API.NoOfWorkers; i++ {
-		wg.Add(1)
-		go pworker(&wg, config)
-	}
-	wg.Wait()
-	close(presults)
-}
-func tsallocate(metriclist []string) {
-	for _, metric := range metriclist {
-		tsjobs <- metric
-	}
-	close(tsjobs)
-}
-func ruallocate(tsuidlist chan []string) {
 
-	//fmt.Printf("ruallocate %v\n", tsuidlist)
+var jobs = make(chan Job, 100)
+var results = make(chan Result, 100)
 
-	batch := 20
-	for i := 0; i < len(tsuidlist); i += batch {
-		j := i + batch
-		if j > len(tsuidlist) {
-			j = len(tsuidlist)
-		}
-		var tsuid []string
-		for _, id := range tsuidlist[i:j] {
+func worker(wg *sync.WaitGroup, config tomlConfig) {
+	for job := range jobs {
 
-			tsuid = append(tsuid, id)
-		}
-		//fmt.Printf("ruallocateresult %v\n", tsuid)
-		rujobs <- tsuid
-	}
-	close(rujobs)
-}
-func pallocate(postlist []Rollup) {
-	for _, pl := range postlist {
-		//fmt.Printf("postlist %d, %v\n", i, pl)
-		pjobs <- pl
-	}
-	close(pjobs)
-}
-func tsworker(wg *sync.WaitGroup, config tomlConfig) {
-	for job := range tsjobs {
-
-		var tsuidlist []string
-		output := GetTSList(job, config)
-		for _, res := range output.Results {
-			result := res.(map[string]interface{})
-			tsuidlist = append(tsuidlist, result["tsuid"].(string))
-		}
-		tsresults <- tsuidlist
+		result := PostRollup(job.data, config)
+		fmt.Printf("rest result: %v\n", result)
+		output := Result{job, result}
+		results <- output
 	}
 	wg.Done()
 }
-func ruworker(wg *sync.WaitGroup, config tomlConfig, endTime int64, startTime int64) {
-	for tsuid := range rujobs {
-
-		rollupdata := GetRollup(config.Servers.ReadEndpoint, tsuid, endTime, startTime)
-		//fmt.Printf("ruworker %v\n", rollupdata)
-		ruresults <- rollupdata
+func createWorkerPool(config tomlConfig) {
+	var wg sync.WaitGroup
+	for i := 0; i < config.API.NoOfWorkers; i++ {
+		wg.Add(1)
+		go worker(&wg, config)
 	}
-	wg.Done()
+	wg.Wait()
+	close(results)
 }
-func pworker(wg *sync.WaitGroup, config tomlConfig) {
-	for job := range pjobs {
-		var post interface{}
-		//fmt.Printf("PostRollup Worker %d, %v\n", job.id, job.post)
-		post = PostRollup(config.Servers.WriteEndpoint, job)
-		//fmt.Printf("PostRollup Worker result %v\n", post)
-		presults <- post
-	}
-	wg.Done()
-}
-func tsresult(done chan bool, config tomlConfig, endTime int64, startTime int64) {
-	for result := range tsresults {
 
-		// Start rollup worker pool
-		/*
-			go ruallocate(result)
-			done := make(chan bool)
-			go ruresult(done, config)
-			rucreateWorkerPool(config, endTime, startTime)
-			<-done
-		*/
-		//fmt.Printf("Job id %d, %v, %v\n", result.job.id, result.job.metric, result.tsuid)
+func result(done chan bool) {
+	for result := range results {
+		fmt.Printf("Job id %d, data %v, result %v\n", result.job.id, result.job.data, result.status)
 	}
 	done <- true
 }
-func ruresult(done chan bool, config tomlConfig) {
-	for result := range ruresults {
-		//fmt.Printf("ruresult Job id %v, %v\n", result.job, result.resp)
-		postrollup := convertRollup(result)
 
-		go pallocate(postrollup)
-		done := make(chan bool)
-		go presult(done, config)
-		pcreateWorkerPool(config)
-		<-done
-	}
-	done <- true
-}
-func presult(done chan bool, config tomlConfig) {
-	for result := range presults {
-		fmt.Printf("presult %v\n", result)
-		time.Sleep(time.Millisecond)
-	}
-	done <- true
-}
 func main() {
-
-	sTime := time.Now()
-
 	// Config
 	var config tomlConfig
 	if _, err := toml.DecodeFile("./opentsdb-rollup.toml", &config); err != nil {
 		fmt.Println(err)
 	}
-	fmt.Printf("%#v\n", config)
-
+	//fmt.Printf("%#v\n", config)
 	// set http rest client defaults
 	resty.SetDebug(false)
 	resty.SetRetryCount(3)
@@ -263,48 +191,35 @@ func main() {
 
 	// set time range
 	originalTime := time.Now()
-	startTime := time.Date(originalTime.Year(), originalTime.Month(), originalTime.Day(), originalTime.Hour(), 0, 0, 0, originalTime.Location())
-	endTime := startTime.Add(time.Duration(time.Duration(-1) * time.Hour))
+	endTime := time.Date(originalTime.Year(), originalTime.Month(), originalTime.Day(), originalTime.Hour(), 0, 0, 0, originalTime.Location())
+	startTime := endTime.Add(time.Duration(time.Duration(-1) * time.Hour))
+
+	fmt.Printf("Rollup Window - StartTime: %d EndTime: %d \n", startTime.Unix(), endTime.Unix())
 
 	// build metric list
-	start := time.Now()
-	var metriclist []string
-	for _, metric := range config.Metric.List {
-		ml := GetMetrics(metric, config)
-		for _, m := range ml {
-			metriclist = append(metriclist, m)
+
+	metriclist := GetMetrics(config)
+
+	for _, m := range metriclist {
+		tslist := GetTSList(m, config)
+		for _, t := range tslist {
+			rollupdata := GetRollup(t, endTime.Unix(), startTime.Unix(), config)
+			//fmt.Printf("GetRollup result, %v\n\n\n", GetRollup(t, endTime.Unix(), startTime.Unix(), config))
+			go func() {
+				for i, r := range rollupdata {
+					job := Job{i, r}
+					jobs <- job
+				}
+				close(jobs)
+				//fmt.Printf("PostRollup status %v\n", PostRollup(r, config))
+			}()
 		}
 	}
-	elapsed := time.Since(start)
-	log.Printf("build metric list %s", elapsed)
 
-	// Start time series uid list worker pool
-	go tsallocate(metriclist)
 	done := make(chan bool)
-	//go tsresult(done, config, endTime.Unix(), startTime.Unix())
-
-	go ruallocate(tsresults)
-	rudone := make(chan bool)
-
-	for result := range ruresults {
-		//fmt.Printf("ruresult Job id %v, %v\n", result.job, result.resp)
-		postrollup := convertRollup(result)
-
-		go pallocate(postrollup)
-		pdone := make(chan bool)
-		go presult(done, config)
-		pcreateWorkerPool(config)
-		<-pdone
-	}
-
-	rucreateWorkerPool(config, endTime.Unix(), startTime.Unix())
-	<-rudone
-
-	tscreateWorkerPool(config)
+	go result(done)
+	createWorkerPool(config)
 	<-done
 
-	eTime := time.Now()
-	diff := eTime.Sub(sTime)
-	fmt.Println("\ncleartotal time taken ", diff.Seconds(), "seconds")
-
+	//fmt.Println(metriclist)
 }

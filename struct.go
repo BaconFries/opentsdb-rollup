@@ -2,14 +2,18 @@ package main
 
 // Lookup struct for search lookup api response
 type Lookup struct {
-	Type         string        `json:"type"`
-	Metric       string        `json:"metric"`
-	Tags         []interface{} `json:"tags"`
-	Limit        int           `json:"limit"`
-	Time         float64       `json:"time"`
-	Results      []interface{} `json:"results"`
-	StartIndex   int           `json:"startIndex"`
-	TotalResults int           `json:"totalResults"`
+	Type    string        `json:"type"`
+	Metric  string        `json:"metric"`
+	Tags    []interface{} `json:"tags"`
+	Limit   int           `json:"limit"`
+	Time    float64       `json:"time"`
+	Results []struct {
+		Tsuid  string            `json:"tsuid"`
+		Metric string            `json:"metric"`
+		Tags   map[string]string `json:"tags"`
+	} `json:"results"`
+	StartIndex   int `json:"startIndex"`
+	TotalResults int `json:"totalResults"`
 }
 
 // Rollup payload struct
