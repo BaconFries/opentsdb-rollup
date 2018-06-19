@@ -14,9 +14,9 @@ ReadEndpoint  = [
 SuggestMax    = "3000"
 LookupLimit   = "20000"
 LookupUseMeta = "true"
-NoOfWorkers   = 10
+NoOfWorkers   = 100
 
 [metric]
 List = [
-  "os"
+  "os.cpu"
   ]

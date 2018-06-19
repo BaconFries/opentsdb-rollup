@@ -1,40 +1,5 @@
 package main
 
-// TSJob time series job struct
-type TSJob struct {
-	id     int
-	metric string
-}
-
-// TSResult time series result struct
-type TSResult struct {
-	job   TSJob
-	tsuid []string
-}
-
-// RUJob rollup job struct
-type RUJob struct {
-	tsuid []string
-}
-
-// RUResult  rollup result struct
-type RUResult struct {
-	job  RUJob
-	resp *QueryRespItem
-}
-
-// PJob POST rollup job struct
-type PJob struct {
-	id   int
-	post Rollup
-}
-
-// PResult  POST rollup result struct
-type PResult struct {
-	job  PJob
-	resp interface{}
-}
-
 // Lookup struct for search lookup api response
 type Lookup struct {
 	Type         string        `json:"type"`
