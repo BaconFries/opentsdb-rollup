@@ -55,7 +55,7 @@ func GetTSList(metric string, config tomlConfig) [][]string {
 	tslist := resp.Result().(*Lookup)
 	//fmt.Printf("tslist: %v \n", tslist)
 
-	batch := 20
+	batch := 60
 	for i := 0; i < len(tslist.Results); i += batch {
 		var k []string
 		j := i + batch
@@ -128,65 +128,32 @@ func convertRollup(in *QueryRespItem) []Rollup {
 }
 
 // PostRollup send rollup datapoints for time series
-func PostRollup(data Rollup, config tomlConfig) interface{} {
-	resp, err := resty.R().
-		SetBody(data).
-		Post(config.Servers.WriteEndpoint + "/api/rollup")
-	if err != nil {
-		fmt.Printf("rest error: %v", err)
+func PostRollup(input chan Rollup, config tomlConfig) {
+	// Increment the wait group counter
+	wait.Add(1)
+	for data := range input {
+
+		resp, err := resty.R().
+			SetBody(data).
+			Post(config.Servers.WriteEndpoint + "/api/rollup")
+		if err != nil {
+			fmt.Printf("rest error: %v", err)
+		}
+		fmt.Printf("result %v\n", resp.StatusCode())
 	}
-	return resp.StatusCode()
+	wait.Done()
 }
 
-type Job struct {
-	id   int
-	data Rollup
-}
-type Result struct {
-	job    Job
-	status interface{}
-}
-
-var jobs = make(chan Job, 10)
-var results = make(chan Result, 10)
-
-func worker(wg *sync.WaitGroup, config tomlConfig) {
-	for job := range jobs {
-
-		result := PostRollup(job.data, config)
-		fmt.Printf("rest result: %v\n", result)
-		output := Result{job, result}
-		results <- output
-	}
-	wg.Done()
-}
-
-func createWorkerPool(config tomlConfig) {
-	var wg sync.WaitGroup
-	for i := 0; i < config.API.NoOfWorkers; i++ {
-		wg.Add(1)
-		go worker(&wg, config)
-	}
-	wg.Wait()
-	close(results)
-}
-
-func allocate(rollupdata []Rollup) {
-	for i, r := range rollupdata {
-		job := Job{i, r}
-		jobs <- job
-	}
-	close(jobs)
-}
-
-func result(done chan bool) {
-	for result := range results {
-		fmt.Printf("Job id %d, data %v, result %v\n", result.job.id, result.job.data, result.status)
-	}
-	done <- true
-}
+var (
+	concurrency = 25
+	wait        = sync.WaitGroup{}
+)
 
 func main() {
+
+	// Rollup channel
+	output := make(chan Rollup)
+
 	// Config
 	var config tomlConfig
 	if _, err := toml.DecodeFile("./opentsdb-rollup.toml", &config); err != nil {
@@ -201,7 +168,7 @@ func main() {
 	// set time range
 	originalTime := time.Now()
 	endTime := time.Date(originalTime.Year(), originalTime.Month(), originalTime.Day(), originalTime.Hour(), 0, 0, 0, originalTime.Location())
-	startTime := endTime.Add(time.Duration(time.Duration(-1) * time.Hour))
+	startTime := endTime.Add(time.Duration(time.Duration(-80) * time.Hour))
 
 	fmt.Printf("Rollup Window - StartTime: %d EndTime: %d \n", startTime.Unix(), endTime.Unix())
 
@@ -209,19 +176,24 @@ func main() {
 
 	metriclist := GetMetrics(config)
 
+	for i := 0; i < concurrency; i++ {
+		go PostRollup(output, config)
+	}
+
 	for _, m := range metriclist {
 		tslist := GetTSList(m, config)
 		for _, t := range tslist {
 			rollupdata := GetRollup(t, endTime.Unix(), startTime.Unix(), config)
-			//fmt.Printf("GetRollup result, %v\n\n\n", GetRollup(t, endTime.Unix(), startTime.Unix(), config))
-			go allocate(rollupdata)
+			fmt.Printf("GetRollup result, %v\n\n\n", GetRollup(t, endTime.Unix(), startTime.Unix(), config))
+
+			for _, r := range rollupdata {
+				//fmt.Printf("r %v\n", r)
+				output <- r
+			}
+
 		}
 	}
-
-	done := make(chan bool)
-	go result(done)
-	createWorkerPool(config)
-	<-done
-
+	close(output)
+	wait.Wait()
 	//fmt.Println(metriclist)
 }

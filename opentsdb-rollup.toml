@@ -18,5 +18,6 @@ NoOfWorkers   = 100
 
 [metric]
 List = [
-  "linux.loadavg_1_min"
+  "os",
+  "linux."
   ]
