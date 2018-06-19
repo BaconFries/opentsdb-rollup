@@ -147,8 +147,8 @@ type Result struct {
 	status interface{}
 }
 
-var jobs = make(chan Job, 100)
-var results = make(chan Result, 100)
+var jobs = make(chan Job, 10)
+var results = make(chan Result, 10)
 
 func worker(wg *sync.WaitGroup, config tomlConfig) {
 	for job := range jobs {
@@ -160,6 +160,7 @@ func worker(wg *sync.WaitGroup, config tomlConfig) {
 	}
 	wg.Done()
 }
+
 func createWorkerPool(config tomlConfig) {
 	var wg sync.WaitGroup
 	for i := 0; i < config.API.NoOfWorkers; i++ {
@@ -168,6 +169,14 @@ func createWorkerPool(config tomlConfig) {
 	}
 	wg.Wait()
 	close(results)
+}
+
+func allocate(rollupdata []Rollup) {
+	for i, r := range rollupdata {
+		job := Job{i, r}
+		jobs <- job
+	}
+	close(jobs)
 }
 
 func result(done chan bool) {
@@ -205,14 +214,7 @@ func main() {
 		for _, t := range tslist {
 			rollupdata := GetRollup(t, endTime.Unix(), startTime.Unix(), config)
 			//fmt.Printf("GetRollup result, %v\n\n\n", GetRollup(t, endTime.Unix(), startTime.Unix(), config))
-			go func() {
-				for i, r := range rollupdata {
-					job := Job{i, r}
-					jobs <- job
-				}
-				close(jobs)
-				//fmt.Printf("PostRollup status %v\n", PostRollup(r, config))
-			}()
+			go allocate(rollupdata)
 		}
 	}
 
