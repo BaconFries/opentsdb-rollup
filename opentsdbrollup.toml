@@ -12,10 +12,18 @@ SuggestMax    = "3000"
 LookupLimit   = "20000"
 LookupUseMeta = "true"
 HoursPast     = -1
-Concurrency   = 10
-Batch         = 70
+Concurrency   = 20
+Batch         = 60
 
 [metric]
 List = [
-  "os"
+        'os',
+        'linux.',
+        'scollector',
+        'redis',
+        'ntp',
+        'hbase',
+        'memcached',
+        'pdns',
+        'dns_cache_resolver'
   ]

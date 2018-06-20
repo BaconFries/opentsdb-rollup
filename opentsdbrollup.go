@@ -190,13 +190,13 @@ func main() {
 	}
 
 	// Concurrency
-	getrollup := make(chan []Rollup, 200)
-	gettslist := make(chan []string, 200)
-	getmetrics := make(chan string, 200)
+	getrollup := make(chan []Rollup, 500)
+	gettslist := make(chan []string, 500)
+	getmetrics := make(chan string, 500)
 	rr := NewRoundRobin(config)
 
 	// set http rest client defaults
-	resty.SetDebug(true)
+	resty.SetDebug(false)
 	resty.SetRetryCount(3)
 	resty.SetHeader("Accept", "application/json")
 
@@ -225,13 +225,12 @@ func main() {
 	}
 
 	for _, m := range metriclist {
-		fmt.Println(m)
+		//fmt.Println(m)
 		getmetrics <- m
 	}
 
+	//wait.Wait()
 	//close(getmetrics)
 	//close(gettslist)
 	//close(getrollup)
-
-	wait.Wait()
 }
