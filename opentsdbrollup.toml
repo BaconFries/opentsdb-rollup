@@ -14,12 +14,11 @@ ReadEndpoint  = [
 SuggestMax    = "3000"
 LookupLimit   = "20000"
 LookupUseMeta = "true"
-HoursPast     = -1
+HoursPast     = -80
 Concurrency   = 500
 Batch         = 80
 
 [metric]
 List = [
-  "os",
   "linux."
   ]
