@@ -1,4 +1,4 @@
-package opentsdbrollup
+package main
 
 import "sync"
 
@@ -7,7 +7,7 @@ type RoundRobin struct {
 	sync.Mutex
 
 	current int
-	pool    []int
+	pool    []string
 }
 
 // Lookup struct for search lookup api response

@@ -4,21 +4,18 @@ title = "rollup config"
 WriteEndpoint = "http://arch3.lab5.defense.net:4242"
 ReadEndpoint  = [
   "http://arch1.lab5.defense.net:4242",
-  "http://arch4.lab5.defense.net:4242",
-  "http://arch6.lab5.defense.net:4242",
-  "http://arch7.lab5.defense.net:4242",
-  "http://arch8.lab5.defense.net:4242"
+  "http://arch4.lab5.defense.net:4242"
 ]
 
 [api]
 SuggestMax    = "3000"
 LookupLimit   = "20000"
 LookupUseMeta = "true"
-HoursPast     = -80
-Concurrency   = 500
-Batch         = 80
+HoursPast     = -1
+Concurrency   = 10
+Batch         = 70
 
 [metric]
 List = [
-  "linux."
+  "os"
   ]
