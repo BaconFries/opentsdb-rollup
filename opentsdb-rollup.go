@@ -55,10 +55,9 @@ func GetTSList(metric string, config tomlConfig) [][]string {
 	tslist := resp.Result().(*Lookup)
 	//fmt.Printf("tslist: %v \n", tslist)
 
-	batch := 60
-	for i := 0; i < len(tslist.Results); i += batch {
+	for i := 0; i < len(tslist.Results); i += config.API.Batch {
 		var k []string
-		j := i + batch
+		j := i + config.API.Batch
 		if j > len(tslist.Results) {
 			j = len(tslist.Results)
 		}
@@ -128,38 +127,35 @@ func convertRollup(in *QueryRespItem) []Rollup {
 }
 
 // PostRollup send rollup datapoints for time series
-func PostRollup(input chan Rollup, config tomlConfig) {
+func PostRollup(input chan []Rollup, config tomlConfig) {
 	// Increment the wait group counter
 	wait.Add(1)
 	for data := range input {
-
-		resp, err := resty.R().
+		//fmt.Printf("post data: %v\n", data)
+		_, err := resty.R().
 			SetBody(data).
 			Post(config.Servers.WriteEndpoint + "/api/rollup")
 		if err != nil {
-			fmt.Printf("rest error: %v", err)
+			fmt.Printf("rest error: %v\n", err)
 		}
-		fmt.Printf("result %v\n", resp.StatusCode())
+		//fmt.Printf("result %v\n", resp.StatusCode())
 	}
 	wait.Done()
 }
 
-var (
-	concurrency = 25
-	wait        = sync.WaitGroup{}
-)
+var wait = sync.WaitGroup{}
 
 func main() {
-
-	// Rollup channel
-	output := make(chan Rollup)
 
 	// Config
 	var config tomlConfig
 	if _, err := toml.DecodeFile("./opentsdb-rollup.toml", &config); err != nil {
 		fmt.Println(err)
 	}
-	//fmt.Printf("%#v\n", config)
+
+	// Concurrency
+	output := make(chan []Rollup)
+
 	// set http rest client defaults
 	resty.SetDebug(false)
 	resty.SetRetryCount(3)
@@ -168,32 +164,26 @@ func main() {
 	// set time range
 	originalTime := time.Now()
 	endTime := time.Date(originalTime.Year(), originalTime.Month(), originalTime.Day(), originalTime.Hour(), 0, 0, 0, originalTime.Location())
-	startTime := endTime.Add(time.Duration(time.Duration(-80) * time.Hour))
-
+	startTime := endTime.Add(time.Duration(time.Duration(config.API.HoursPast) * time.Hour))
 	fmt.Printf("Rollup Window - StartTime: %d EndTime: %d \n", startTime.Unix(), endTime.Unix())
 
 	// build metric list
-
 	metriclist := GetMetrics(config)
 
-	for i := 0; i < concurrency; i++ {
+	// Start PostRollup workers
+	for i := 0; i < config.API.Concurrency; i++ {
 		go PostRollup(output, config)
 	}
 
 	for _, m := range metriclist {
+		fmt.Println(m)
 		tslist := GetTSList(m, config)
 		for _, t := range tslist {
 			rollupdata := GetRollup(t, endTime.Unix(), startTime.Unix(), config)
-			fmt.Printf("GetRollup result, %v\n\n\n", GetRollup(t, endTime.Unix(), startTime.Unix(), config))
-
-			for _, r := range rollupdata {
-				//fmt.Printf("r %v\n", r)
-				output <- r
-			}
-
+			//fmt.Printf("GetRollup result, %v\n\n\n", rollupdata)
+			output <- rollupdata
 		}
 	}
 	close(output)
 	wait.Wait()
-	//fmt.Println(metriclist)
 }

@@ -14,7 +14,9 @@ ReadEndpoint  = [
 SuggestMax    = "3000"
 LookupLimit   = "20000"
 LookupUseMeta = "true"
-NoOfWorkers   = 100
+HoursPast     = -1
+Concurrency   = 500
+Batch         = 80
 
 [metric]
 List = [

@@ -68,7 +68,9 @@ type api struct {
 	SuggestMax    string
 	LookupLimit   string
 	LookupUseMeta string
-	NoOfWorkers   int
+	HoursPast     int
+	Concurrency   int
+	Batch         int
 }
 
 // metric
