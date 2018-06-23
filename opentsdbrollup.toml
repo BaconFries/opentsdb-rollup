@@ -1,29 +1,20 @@
 title = "rollup config"
 
 [servers]
-WriteEndpoint = "http://arch3.lab5.defense.net:4242"
+WriteEndpoint = "http://hdmn2.lon1.defense.net:4242"
 ReadEndpoint  = [
-  "http://arch1.lab5.defense.net:4242",
-  "http://arch4.lab5.defense.net:4242"
+  "http://hdmn2.lon1.defense.net:4243"
 ]
 
 [api]
-SuggestMax    = "3000"
-LookupLimit   = "20000"
+SuggestMax    = "5000"
+LookupLimit   = "500000"
 LookupUseMeta = "true"
-HoursPast     = -1
-Concurrency   = 20
-Batch         = 60
+HoursPast     = -24
+Concurrency   = 40
+Batch         = 35
 
 [metric]
 List = [
-        'os',
-        'linux.',
-        'scollector',
-        'redis',
-        'ntp',
-        'hbase',
-        'memcached',
-        'pdns',
-        'dns_cache_resolver'
+        'linux.'
   ]

@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -33,7 +35,7 @@ func (r *RoundRobin) Get() string {
 }
 
 // GetMetrics search metric names from suggest api call
-func GetMetrics(config tomlConfig) []string {
+func GetMetrics(config tomlConfig, rr *RoundRobin) []string {
 	var metriclist []string
 	for _, metric := range config.Metric.List {
 		resp, err := resty.R().
@@ -42,7 +44,7 @@ func GetMetrics(config tomlConfig) []string {
 				"max":  config.API.SuggestMax,
 				"q":    metric,
 			}).
-			Get(config.Servers.ReadEndpoint[0] + "/api/suggest")
+			Get(rr.Get() + "/api/suggest")
 		if err != nil {
 			panic(err)
 		}
@@ -65,7 +67,7 @@ func GetTSList(getmetrics chan string, gettslist chan []string, config tomlConfi
 
 		//var ts [][]string
 		url := rr.Get() + "/api/search/lookup"
-		//fmt.Println(url)
+		fmt.Println(url)
 		resp, err := resty.R().
 			SetResult(&Lookup{}).
 			SetQueryParams(map[string]string{
@@ -104,6 +106,9 @@ func GetTSList(getmetrics chan string, gettslist chan []string, config tomlConfi
 func GetRollup(gettslist chan []string, getrollup chan []Rollup, endTime int64, startTime int64, config tomlConfig, rr *RoundRobin) {
 	wait.Add(1)
 	for tsuid := range gettslist {
+
+		//fmt.Printf("getrollup tsuid: %v\n", tsuid)
+
 		var jsondata Query
 		var queries SubQuery
 		jsondata.Start = startTime
@@ -111,18 +116,17 @@ func GetRollup(gettslist chan []string, getrollup chan []Rollup, endTime int64, 
 		queries.Aggregator = "none"
 		queries.Downsample = "1h-count"
 
-		queries.Tsuids = tsuid
-		/*
-			for _, chunk := range tsuid {
-				queries.Tsuids = append(queries.Tsuids, chunk)
-			}
-		*/
+		//queries.Tsuids = tsuid
+		for _, chunk := range tsuid {
+			queries.Tsuids = append(queries.Tsuids, chunk)
+		}
+
 		jsondata.Queries = append(jsondata.Queries, queries)
 		queries.Downsample = "1h-sum"
 		jsondata.Queries = append(jsondata.Queries, queries)
 
 		url := rr.Get() + "/api/query"
-		//fmt.Println(url)
+		//fmt.Printf("getrollup jsondata: %v\n", jsondata)
 		resp, err := resty.R().
 			SetResult(&QueryRespItem{}).
 			SetBody(jsondata).
@@ -132,8 +136,14 @@ func GetRollup(gettslist chan []string, getrollup chan []Rollup, endTime int64, 
 		}
 		//fmt.Printf("GetRollup, %v, %v, %v, %v\n", config.Servers.ReadEndpoint[0], tsuid, endTime, startTime)
 		result := resp.Result().(*QueryRespItem)
-		converted := convertRollup(result)
-		getrollup <- converted
+
+		if len(*result) != 0 {
+			//fmt.Printf("getrollup result: %v\n", result)
+			converted := convertRollup(result)
+			getrollup <- converted
+		} else {
+			log.Println("GetRollup no results")
+		}
 	}
 	wait.Done()
 
@@ -145,6 +155,7 @@ func convertRollup(in *QueryRespItem) []Rollup {
 	var result []Rollup
 	a := len(*in) / 2
 	for i, item := range *in {
+		//fmt.Printf("convertrollup item: %v\n", item)
 		agg := "SUM"
 		if i < a {
 			agg = "COUNT"
@@ -159,6 +170,7 @@ func convertRollup(in *QueryRespItem) []Rollup {
 			result = append(result, test)
 		}
 	}
+	//fmt.Printf("convertrollup: %v\n", result)
 	return result
 }
 
@@ -168,21 +180,28 @@ func PostRollup(input chan []Rollup, config tomlConfig) {
 	wait.Add(1)
 	for data := range input {
 		//fmt.Printf("post data: %v\n", data)
-		_, err := resty.R().
+		resp, err := resty.R().
 			SetBody(data).
-			Post(config.Servers.WriteEndpoint + "/api/rollup")
+			Post(config.Servers.WriteEndpoint + "/api/rollup?details")
 		if err != nil {
 			fmt.Printf("rest error: %v\n", err)
 		}
-		//fmt.Printf("result %v\n", resp.StatusCode())
+		//fmt.Printf("Error: %v\n", err)
+		//fmt.Printf("Response Status Code: %v\n", resp.StatusCode())
+		//fmt.Printf("Response Status: %v\n", resp.Status())
+		//fmt.Printf("Response Time: %v\n", resp.Time())
+		//fmt.Printf("Response Received At: %v\n", resp.ReceivedAt())
+		fmt.Printf("Response Body: %v\n", resp)
 	}
 	wait.Done()
 }
 
 var wait = sync.WaitGroup{}
+var end = flag.Int64("end", 0, "end of window. (Required)")
 
 func main() {
 
+	flag.Parse()
 	// Config
 	var config tomlConfig
 	if _, err := toml.DecodeFile("./opentsdbrollup.toml", &config); err != nil {
@@ -190,24 +209,29 @@ func main() {
 	}
 
 	// Concurrency
-	getrollup := make(chan []Rollup, 500)
-	gettslist := make(chan []string, 500)
-	getmetrics := make(chan string, 500)
+	getrollup := make(chan []Rollup, 200)
+	gettslist := make(chan []string, 200)
+	getmetrics := make(chan string, 100)
 	rr := NewRoundRobin(config)
 
-	// set http rest client defaults
+	// set http rest client defaultsq
 	resty.SetDebug(false)
-	resty.SetRetryCount(3)
+	resty.SetRetryCount(6)
 	resty.SetHeader("Accept", "application/json")
 
 	// set time range
-	originalTime := time.Now()
+	//originalTime := time.Now().UTC()
+	originalTime := time.Unix(*end, 0).UTC()
+	//originalTime := time. time.Duration(time.Duration(end) * time.Hour)
+
 	endTime := time.Date(originalTime.Year(), originalTime.Month(), originalTime.Day(), originalTime.Hour(), 0, 0, 0, originalTime.Location())
 	startTime := endTime.Add(time.Duration(time.Duration(config.API.HoursPast) * time.Hour))
-	fmt.Printf("Rollup Window - StartTime: %d EndTime: %d \n", startTime.Unix(), endTime.Unix())
-
+	fmt.Printf("Rollup Window - StartTime: %s EndTime: %s \n", startTime.Format(time.UnixDate), endTime.Format(time.UnixDate))
+	//os.Exit(3)
 	// build metric list
-	metriclist := GetMetrics(config)
+	metriclist := GetMetrics(config, rr)
+
+	wc := config.API.Concurrency / 2
 
 	// Start PostRollup workers
 	for i := 0; i < config.API.Concurrency; i++ {
@@ -220,12 +244,12 @@ func main() {
 	}
 
 	// Start GetTSList workers
-	for i := 0; i < config.API.Concurrency; i++ {
+	for i := 0; i < wc; i++ {
 		go GetTSList(getmetrics, gettslist, config, rr)
 	}
 
 	for _, m := range metriclist {
-		//fmt.Println(m)
+		fmt.Println(m)
 		getmetrics <- m
 	}
 
