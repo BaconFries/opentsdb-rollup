@@ -207,9 +207,9 @@ func PostRollup(input chan []Rollup, wr *RoundRobin, wait *sync.WaitGroup) {
 		var result *RollupResponse
 		json.NewDecoder(resp.Body).Decode(&result)
 		defer resp.Body.Close()
-		if result != nil {
+		if result.Success != 0 || result.Failed != 0 {
 			//fmt.Printf("postrollup result: %v\n", result)
-			//fmt.Printf("Response Summary: Success %d Failed %d\n", summary.Success, summary.Failed)
+			fmt.Printf("Response Summary: Success %d Failed %d\n", result.Success, result.Failed)
 		} else {
 			log.Println("PostRollup no results")
 		}
@@ -254,11 +254,15 @@ func main() {
 	fmt.Printf("Rollup Window - StartTime: %s EndTime: %s \n", startTime.Format(time.UnixDate), endTime.Format(time.UnixDate))
 
 	// build metric list
-	wait.Add(4)
+	wait.Add(16)
 	go GetMetrics(getmetrics, config, rr, &wait)
-	go GetTSList(getmetrics, gettslist, config, rr, &wait)
-	go GetRollup(gettslist, getrollup, endTime.Unix(), startTime.Unix(), config, rr, &wait)
-	go PostRollup(getrollup, wr, &wait)
+	for i := 0; i < 10; i++ {
+		go GetTSList(getmetrics, gettslist, config, rr, &wait)
+		go GetRollup(gettslist, getrollup, endTime.Unix(), startTime.Unix(), config, rr, &wait)
+	}
+	for i := 0; i < 5; i++ {
+		go PostRollup(getrollup, wr, &wait)
+	}
 	wait.Wait()
 
 }
