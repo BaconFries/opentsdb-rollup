@@ -18,7 +18,7 @@ Batch         = 40
 
 [metric]
 List = [
-'linux.'
+'linux.loadavg_1_min'
 ]
 
 

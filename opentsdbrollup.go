@@ -71,7 +71,6 @@ func GetMetrics(getmetrics chan<- string, config tomlConfig, rr *RoundRobin, wai
 			getmetrics <- m
 		}
 	}
-	close(getmetrics)
 	wait.Done()
 }
 
@@ -119,7 +118,6 @@ func GetTSList(getmetrics chan string, gettslist chan<- []string, config tomlCon
 		}
 
 	}
-	close(gettslist)
 	wait.Done()
 }
 
@@ -163,8 +161,8 @@ func GetRollup(gettslist chan []string, getrollup chan<- []Rollup, endTime int64
 			log.Println("GetRollup no results")
 		}
 	}
-	close(getrollup)
 	wait.Done()
+
 }
 
 // convertRollup takes aggregated rollup data and formated it for posting to rollup api
@@ -216,14 +214,16 @@ func PostRollup(input chan []Rollup, wr *RoundRobin, wait *sync.WaitGroup) {
 
 	}
 	wait.Done()
+	return
 }
 
 var wait = sync.WaitGroup{}
-var end = flag.Int64("end", 0, "end of window.")
-var hours = flag.Int("hours", 0, "window size.")
+var from = flag.Int64("from", 0, "start of window.")
+var to = flag.Int64("to", 0, "end of window.")
+var window = flag.Int("hours", 0, "window size.")
 
 func main() {
-
+	sTime := time.Now()
 	flag.Parse()
 	// Config
 	var config tomlConfig
@@ -240,12 +240,12 @@ func main() {
 
 	// set time range
 	originalTime := time.Now().UTC()
-	if *end > 0 {
-		originalTime = time.Unix(*end, 0).UTC()
+	if *to > 0 {
+		originalTime = time.Unix(*to, 0).UTC()
 	}
 	hourspast := config.API.HoursPast
-	if *hours > 0 {
-		hourspast = *hours * -1
+	if *window > 0 {
+		hourspast = *window * -1
 		fmt.Printf("Rollup Window Size override %d hours\n", hourspast)
 	}
 	//originalTime := time. time.Duration(time.Duration(end) * time.Hour)
@@ -263,6 +263,13 @@ func main() {
 	for i := 0; i < 5; i++ {
 		go PostRollup(getrollup, wr, &wait)
 	}
-	wait.Wait()
 
+	wait.Wait()
+	close(getmetrics)
+	close(getrollup)
+	close(gettslist)
+
+	eTime := time.Now()
+	diff := eTime.Sub(sTime)
+	fmt.Println("total time taken ", diff.Seconds(), "seconds")
 }
