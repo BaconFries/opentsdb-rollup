@@ -1,20 +1,30 @@
 title = "rollup config"
 
 [servers]
-WriteEndpoint = "http://hdmn2.lon1.defense.net:4242"
+WriteEndpoint = [
+  "http://hdmn1.lon1.defense.net:4242",
+  "http://hdmn3.lon1.defense.net:4242"
+]
 ReadEndpoint  = [
-  "http://hdmn2.lon1.defense.net:4243"
+  "http://hdmn2.lon1.defense.net:4242"
 ]
 
 [api]
 SuggestMax    = "5000"
 LookupLimit   = "500000"
 LookupUseMeta = "true"
-HoursPast     = -24
-Concurrency   = 40
-Batch         = 35
+HoursPast     = -2
+Batch         = 40
 
 [metric]
 List = [
-        'linux.'
-  ]
+'linux.'
+]
+
+
+#[metric]
+#List = [
+#'virtual_server',
+#'profile_http',
+#'profile_clientssl'
+#  ]

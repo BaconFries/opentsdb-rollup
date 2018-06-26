@@ -38,10 +38,11 @@ type Rollup struct {
 
 // SubQuery data to rollup
 type SubQuery struct {
-	Aggregator string   `json:"aggregator"`
-	Metric     string   `json:"metric,omitempty"`
-	Downsample string   `json:"downsample"`
-	Tsuids     []string `json:"tsuids,omitempty"`
+	Aggregator  string   `json:"aggregator"`
+	Metric      string   `json:"metric,omitempty"`
+	RollupTable string   `json:"rollupTable,omitempty"`
+	Downsample  string   `json:"downsample"`
+	Tsuids      []string `json:"tsuids,omitempty"`
 }
 
 // Query data to rollup
@@ -59,6 +60,12 @@ type QueryRespItem []struct {
 	Dps           map[string]float64 `json:"dps"`
 }
 
+// RollupResponse struct for post output
+type RollupResponse struct {
+	Success int
+	Failed  int
+}
+
 // tomlConfig file
 type tomlConfig struct {
 	Title   string
@@ -69,7 +76,7 @@ type tomlConfig struct {
 
 // servers
 type servers struct {
-	WriteEndpoint string
+	WriteEndpoint []string
 	ReadEndpoint  []string
 }
 
@@ -79,7 +86,6 @@ type api struct {
 	LookupLimit   string
 	LookupUseMeta string
 	HoursPast     int
-	Concurrency   int
 	Batch         int
 }
 

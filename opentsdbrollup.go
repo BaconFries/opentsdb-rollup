@@ -1,22 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"gopkg.in/resty.v1"
 )
 
 // NewRoundRobin ...
-func NewRoundRobin(config tomlConfig) *RoundRobin {
+func NewRoundRobin(pool []string) *RoundRobin {
 	return &RoundRobin{
 		current: 0,
-		pool:    config.Servers.ReadEndpoint,
+		pool:    pool,
 	}
 }
 
@@ -35,52 +37,71 @@ func (r *RoundRobin) Get() string {
 }
 
 // GetMetrics search metric names from suggest api call
-func GetMetrics(config tomlConfig, rr *RoundRobin) []string {
-	var metriclist []string
+func GetMetrics(getmetrics chan<- string, config tomlConfig, rr *RoundRobin, wait *sync.WaitGroup) {
 	for _, metric := range config.Metric.List {
-		resp, err := resty.R().
-			SetQueryParams(map[string]string{
-				"type": "metrics",
-				"max":  config.API.SuggestMax,
-				"q":    metric,
-			}).
-			Get(rr.Get() + "/api/suggest")
+
+		uri := rr.Get() + "/api/suggest"
+
+		req, err := http.NewRequest("GET", uri, nil)
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
+
+		q := req.URL.Query()
+		q.Add("type", "metrics")
+		q.Add("max", config.API.SuggestMax)
+		q.Add("q", metric)
+		req.URL.RawQuery = q.Encode()
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer resp.Body.Close()
+		result, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+
 		var ml []string
-		json.Unmarshal(resp.Body(), &ml)
+		json.Unmarshal(result, &ml)
 
 		for _, m := range ml {
-			metriclist = append(metriclist, m)
+			//fmt.Printf("GetMetrics: %s\n", m)
+			getmetrics <- m
 		}
 	}
-
-	return metriclist
-
+	close(getmetrics)
+	wait.Done()
 }
 
 // GetTSList gets timeseries list
-func GetTSList(getmetrics chan string, gettslist chan []string, config tomlConfig, rr *RoundRobin) {
-	wait.Add(1)
+func GetTSList(getmetrics chan string, gettslist chan<- []string, config tomlConfig, rr *RoundRobin, wait *sync.WaitGroup) {
 	for metric := range getmetrics {
-
-		//var ts [][]string
-		url := rr.Get() + "/api/search/lookup"
-		fmt.Println(url)
-		resp, err := resty.R().
-			SetResult(&Lookup{}).
-			SetQueryParams(map[string]string{
-				"useMeta": config.API.LookupUseMeta,
-				"limit":   config.API.LookupLimit,
-				"m":       metric,
-			}).
-			Get(url)
+		uri := rr.Get() + "/api/search/lookup"
+		req, err := http.NewRequest("GET", uri, nil)
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
-		tslist := resp.Result().(*Lookup)
+
+		q := req.URL.Query()
+		q.Add("useMeta", config.API.LookupUseMeta)
+		q.Add("limit", config.API.LookupLimit)
+		q.Add("m", metric)
+		req.URL.RawQuery = q.Encode()
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var tslist *Lookup
+		json.NewDecoder(resp.Body).Decode(&tslist)
+
 		//fmt.Printf("tslist: %v \n", tslist)
+		if tslist == nil {
+			log.Fatal("fail")
+		}
 
 		for i := 0; i < len(tslist.Results); i += config.API.Batch {
 			var k []string
@@ -98,13 +119,13 @@ func GetTSList(getmetrics chan string, gettslist chan []string, config tomlConfi
 		}
 
 	}
+	close(gettslist)
 	wait.Done()
-
 }
 
 // GetRollup get rollup datapoints for time series
-func GetRollup(gettslist chan []string, getrollup chan []Rollup, endTime int64, startTime int64, config tomlConfig, rr *RoundRobin) {
-	wait.Add(1)
+func GetRollup(gettslist chan []string, getrollup chan<- []Rollup, endTime int64, startTime int64, config tomlConfig, rr *RoundRobin, wait *sync.WaitGroup) {
+
 	for tsuid := range gettslist {
 
 		//fmt.Printf("getrollup tsuid: %v\n", tsuid)
@@ -124,20 +145,17 @@ func GetRollup(gettslist chan []string, getrollup chan []Rollup, endTime int64, 
 		jsondata.Queries = append(jsondata.Queries, queries)
 		queries.Downsample = "1h-sum"
 		jsondata.Queries = append(jsondata.Queries, queries)
+		b := new(bytes.Buffer)
+		json.NewEncoder(b).Encode(jsondata)
 
-		url := rr.Get() + "/api/query"
-		//fmt.Printf("getrollup jsondata: %v\n", jsondata)
-		resp, err := resty.R().
-			SetResult(&QueryRespItem{}).
-			SetBody(jsondata).
-			Post(url)
-		if err != nil {
-			panic(err)
-		}
-		//fmt.Printf("GetRollup, %v, %v, %v, %v\n", config.Servers.ReadEndpoint[0], tsuid, endTime, startTime)
-		result := resp.Result().(*QueryRespItem)
+		uri := rr.Get() + "/api/query"
+		resp, _ := http.Post(uri, "application/json; charset=utf-8", b)
+		//io.Copy(os.Stdout, resp.Body)
 
-		if len(*result) != 0 {
+		var result *QueryRespItem
+		json.NewDecoder(resp.Body).Decode(&result)
+		defer resp.Body.Close()
+		if *result != nil {
 			//fmt.Printf("getrollup result: %v\n", result)
 			converted := convertRollup(result)
 			getrollup <- converted
@@ -145,8 +163,8 @@ func GetRollup(gettslist chan []string, getrollup chan []Rollup, endTime int64, 
 			log.Println("GetRollup no results")
 		}
 	}
+	close(getrollup)
 	wait.Done()
-
 }
 
 // convertRollup takes aggregated rollup data and formated it for posting to rollup api
@@ -175,29 +193,34 @@ func convertRollup(in *QueryRespItem) []Rollup {
 }
 
 // PostRollup send rollup datapoints for time series
-func PostRollup(input chan []Rollup, config tomlConfig) {
-	// Increment the wait group counter
-	wait.Add(1)
+func PostRollup(input chan []Rollup, wr *RoundRobin, wait *sync.WaitGroup) {
+
 	for data := range input {
 		//fmt.Printf("post data: %v\n", data)
-		resp, err := resty.R().
-			SetBody(data).
-			Post(config.Servers.WriteEndpoint + "/api/rollup?details")
-		if err != nil {
-			fmt.Printf("rest error: %v\n", err)
+
+		b := new(bytes.Buffer)
+		json.NewEncoder(b).Encode(data)
+
+		uri := wr.Get() + "/api/rollup?summary"
+		resp, _ := http.Post(uri, "application/json; charset=utf-8", b)
+
+		var result *RollupResponse
+		json.NewDecoder(resp.Body).Decode(&result)
+		defer resp.Body.Close()
+		if result != nil {
+			//fmt.Printf("postrollup result: %v\n", result)
+			//fmt.Printf("Response Summary: Success %d Failed %d\n", summary.Success, summary.Failed)
+		} else {
+			log.Println("PostRollup no results")
 		}
-		//fmt.Printf("Error: %v\n", err)
-		//fmt.Printf("Response Status Code: %v\n", resp.StatusCode())
-		//fmt.Printf("Response Status: %v\n", resp.Status())
-		//fmt.Printf("Response Time: %v\n", resp.Time())
-		//fmt.Printf("Response Received At: %v\n", resp.ReceivedAt())
-		fmt.Printf("Response Body: %v\n", resp)
+
 	}
 	wait.Done()
 }
 
 var wait = sync.WaitGroup{}
-var end = flag.Int64("end", 0, "end of window. (Required)")
+var end = flag.Int64("end", 0, "end of window.")
+var hours = flag.Int("hours", 0, "window size.")
 
 func main() {
 
@@ -209,52 +232,33 @@ func main() {
 	}
 
 	// Concurrency
-	getrollup := make(chan []Rollup, 200)
-	gettslist := make(chan []string, 200)
-	getmetrics := make(chan string, 100)
-	rr := NewRoundRobin(config)
-
-	// set http rest client defaultsq
-	resty.SetDebug(false)
-	resty.SetRetryCount(6)
-	resty.SetHeader("Accept", "application/json")
+	getrollup := make(chan []Rollup, 500)
+	gettslist := make(chan []string, 500)
+	getmetrics := make(chan string, 500)
+	rr := NewRoundRobin(config.Servers.ReadEndpoint)
+	wr := NewRoundRobin(config.Servers.WriteEndpoint)
 
 	// set time range
-	//originalTime := time.Now().UTC()
-	originalTime := time.Unix(*end, 0).UTC()
+	originalTime := time.Now().UTC()
+	if *end > 0 {
+		originalTime = time.Unix(*end, 0).UTC()
+	}
+	hourspast := config.API.HoursPast
+	if *hours > 0 {
+		hourspast = *hours * -1
+		fmt.Printf("Rollup Window Size override %d hours\n", hourspast)
+	}
 	//originalTime := time. time.Duration(time.Duration(end) * time.Hour)
-
 	endTime := time.Date(originalTime.Year(), originalTime.Month(), originalTime.Day(), originalTime.Hour(), 0, 0, 0, originalTime.Location())
-	startTime := endTime.Add(time.Duration(time.Duration(config.API.HoursPast) * time.Hour))
+	startTime := endTime.Add(time.Duration(time.Duration(hourspast) * time.Hour))
 	fmt.Printf("Rollup Window - StartTime: %s EndTime: %s \n", startTime.Format(time.UnixDate), endTime.Format(time.UnixDate))
-	//os.Exit(3)
+
 	// build metric list
-	metriclist := GetMetrics(config, rr)
+	wait.Add(4)
+	go GetMetrics(getmetrics, config, rr, &wait)
+	go GetTSList(getmetrics, gettslist, config, rr, &wait)
+	go GetRollup(gettslist, getrollup, endTime.Unix(), startTime.Unix(), config, rr, &wait)
+	go PostRollup(getrollup, wr, &wait)
+	wait.Wait()
 
-	wc := config.API.Concurrency / 2
-
-	// Start PostRollup workers
-	for i := 0; i < config.API.Concurrency; i++ {
-		go PostRollup(getrollup, config)
-	}
-
-	// Start GetRollup workers
-	for i := 0; i < config.API.Concurrency; i++ {
-		go GetRollup(gettslist, getrollup, endTime.Unix(), startTime.Unix(), config, rr)
-	}
-
-	// Start GetTSList workers
-	for i := 0; i < wc; i++ {
-		go GetTSList(getmetrics, gettslist, config, rr)
-	}
-
-	for _, m := range metriclist {
-		fmt.Println(m)
-		getmetrics <- m
-	}
-
-	//wait.Wait()
-	//close(getmetrics)
-	//close(gettslist)
-	//close(getrollup)
 }
