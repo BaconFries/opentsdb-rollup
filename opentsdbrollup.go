@@ -8,13 +8,24 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
-// NewRoundRobin ...
+// Vars
+var wait = sync.WaitGroup{}
+var from = flag.Int64("from", 0, "start of window.")
+var to = flag.Int64("to", 0, "end of window.")
+var window = flag.Int("window", 0, "window size.")
+var getrollup = make(chan []Rollup, 64)
+var gettslist = make(chan []string, 64)
+var getmetrics = make(chan string, 64)
+var config tomlConfig
+
+// NewRoundRobin server list
 func NewRoundRobin(pool []string) *RoundRobin {
 	return &RoundRobin{
 		current: 0,
@@ -22,7 +33,7 @@ func NewRoundRobin(pool []string) *RoundRobin {
 	}
 }
 
-// Get ...
+// Get next server in list
 func (r *RoundRobin) Get() string {
 	r.Lock()
 	defer r.Unlock()
@@ -37,7 +48,8 @@ func (r *RoundRobin) Get() string {
 }
 
 // GetMetrics search metric names from suggest api call
-func GetMetrics(getmetrics chan<- string, config tomlConfig, rr *RoundRobin, wait *sync.WaitGroup) {
+func GetMetrics(rr *RoundRobin, wait *sync.WaitGroup) {
+	defer wait.Done()
 	for _, metric := range config.Metric.List {
 
 		uri := rr.Get() + "/api/suggest"
@@ -67,15 +79,18 @@ func GetMetrics(getmetrics chan<- string, config tomlConfig, rr *RoundRobin, wai
 		json.Unmarshal(result, &ml)
 
 		for _, m := range ml {
-			//fmt.Printf("GetMetrics: %s\n", m)
+			fmt.Printf("GetMetrics: %s\n", m)
 			getmetrics <- m
 		}
 	}
-	wait.Done()
+	close(getmetrics)
 }
 
 // GetTSList gets timeseries list
-func GetTSList(getmetrics chan string, gettslist chan<- []string, config tomlConfig, rr *RoundRobin, wait *sync.WaitGroup) {
+func GetTSList(rr *RoundRobin, wait *sync.WaitGroup) {
+
+	defer wait.Done()
+
 	for metric := range getmetrics {
 		uri := rr.Get() + "/api/search/lookup"
 		req, err := http.NewRequest("GET", uri, nil)
@@ -116,16 +131,15 @@ func GetTSList(getmetrics chan string, gettslist chan<- []string, config tomlCon
 			//ts = append(ts, k)
 			gettslist <- k
 		}
-
 	}
-	wait.Done()
 }
 
 // GetRollup get rollup datapoints for time series
-func GetRollup(gettslist chan []string, getrollup chan<- []Rollup, endTime int64, startTime int64, config tomlConfig, rr *RoundRobin, wait *sync.WaitGroup) {
-
+func GetRollup(endTime int64, startTime int64, rr *RoundRobin, wait *sync.WaitGroup) {
+	defer wait.Done()
 	for tsuid := range gettslist {
-
+		//fmt.Println("capacity is", cap(gettslist))
+		//fmt.Println("length is", len(gettslist))
 		//fmt.Printf("getrollup tsuid: %v\n", tsuid)
 
 		var jsondata Query
@@ -135,7 +149,6 @@ func GetRollup(gettslist chan []string, getrollup chan<- []Rollup, endTime int64
 		queries.Aggregator = "none"
 		queries.Downsample = "1h-count"
 
-		//queries.Tsuids = tsuid
 		for _, chunk := range tsuid {
 			queries.Tsuids = append(queries.Tsuids, chunk)
 		}
@@ -161,7 +174,6 @@ func GetRollup(gettslist chan []string, getrollup chan<- []Rollup, endTime int64
 			log.Println("GetRollup no results")
 		}
 	}
-	wait.Done()
 
 }
 
@@ -191,9 +203,9 @@ func convertRollup(in *QueryRespItem) []Rollup {
 }
 
 // PostRollup send rollup datapoints for time series
-func PostRollup(input chan []Rollup, wr *RoundRobin, wait *sync.WaitGroup) {
-
-	for data := range input {
+func PostRollup(wr *RoundRobin, wait *sync.WaitGroup) {
+	defer wait.Done()
+	for data := range getrollup {
 		//fmt.Printf("post data: %v\n", data)
 
 		b := new(bytes.Buffer)
@@ -213,28 +225,58 @@ func PostRollup(input chan []Rollup, wr *RoundRobin, wait *sync.WaitGroup) {
 		}
 
 	}
-	wait.Done()
-	return
+
 }
 
-var wait = sync.WaitGroup{}
-var from = flag.Int64("from", 0, "start of window.")
-var to = flag.Int64("to", 0, "end of window.")
-var window = flag.Int("hours", 0, "window size.")
+//GetTSListWorkerPool spawns workers
+func GetTSListWorkerPool(noOfWorkers int, rr *RoundRobin, wait *sync.WaitGroup) {
+	var wg sync.WaitGroup
+	for i := 0; i < noOfWorkers; i++ {
+		wg.Add(1)
+		go GetTSList(rr, &wg)
+	}
+	wg.Wait()
+	close(gettslist)
+	wait.Done()
+}
+
+//GetRollupWorkerPool spawns workers
+func GetRollupWorkerPool(noOfWorkers int, endTime int64, startTime int64, rr *RoundRobin, wait *sync.WaitGroup) {
+
+	var wg sync.WaitGroup
+	for i := 0; i < noOfWorkers; i++ {
+		wg.Add(1)
+		go GetRollup(endTime, startTime, rr, &wg)
+	}
+	wg.Wait()
+	close(getrollup)
+	wait.Done()
+}
+
+//PostRollupWorkerPool spawns workers
+func PostRollupWorkerPool(noOfWorkers int, wr *RoundRobin, wait *sync.WaitGroup) {
+	var wg sync.WaitGroup
+	for i := 0; i < noOfWorkers; i++ {
+		wg.Add(1)
+		PostRollup(wr, &wg)
+	}
+	wg.Wait()
+	wait.Done()
+}
 
 func main() {
 	sTime := time.Now()
+
 	flag.Parse()
 	// Config
-	var config tomlConfig
+
 	if _, err := toml.DecodeFile("./opentsdbrollup.toml", &config); err != nil {
 		fmt.Println(err)
 	}
 
-	// Concurrency
-	getrollup := make(chan []Rollup, 500)
-	gettslist := make(chan []string, 500)
-	getmetrics := make(chan string, 500)
+	done := make(chan bool)
+	defer close(done)
+
 	rr := NewRoundRobin(config.Servers.ReadEndpoint)
 	wr := NewRoundRobin(config.Servers.WriteEndpoint)
 
@@ -254,22 +296,15 @@ func main() {
 	fmt.Printf("Rollup Window - StartTime: %s EndTime: %s \n", startTime.Format(time.UnixDate), endTime.Format(time.UnixDate))
 
 	// build metric list
-	wait.Add(16)
-	go GetMetrics(getmetrics, config, rr, &wait)
-	for i := 0; i < 10; i++ {
-		go GetTSList(getmetrics, gettslist, config, rr, &wait)
-		go GetRollup(gettslist, getrollup, endTime.Unix(), startTime.Unix(), config, rr, &wait)
-	}
-	for i := 0; i < 5; i++ {
-		go PostRollup(getrollup, wr, &wait)
-	}
-
+	wait.Add(4)
+	go GetMetrics(rr, &wait)
+	go GetTSListWorkerPool(config.API.ReadWorkers, rr, &wait)
+	go GetRollupWorkerPool(config.API.ReadWorkers, endTime.Unix(), startTime.Unix(), rr, &wait)
+	go PostRollupWorkerPool(config.API.WriteWorkers, wr, &wait)
 	wait.Wait()
-	close(getmetrics)
-	close(getrollup)
-	close(gettslist)
 
 	eTime := time.Now()
 	diff := eTime.Sub(sTime)
 	fmt.Println("total time taken ", diff.Seconds(), "seconds")
+	os.Exit(0)
 }

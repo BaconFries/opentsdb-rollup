@@ -87,6 +87,8 @@ type api struct {
 	LookupUseMeta string
 	HoursPast     int
 	Batch         int
+	ReadWorkers   int
+	WriteWorkers  int
 }
 
 // metric
