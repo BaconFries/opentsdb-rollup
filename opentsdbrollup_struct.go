@@ -1,6 +1,8 @@
 package main
 
-import "sync"
+import (
+	"sync"
+)
 
 // RoundRobin struct
 type RoundRobin struct {
@@ -68,10 +70,24 @@ type RollupResponse struct {
 
 // tomlConfig file
 type tomlConfig struct {
-	Title   string
-	Servers servers
-	API     api
-	Metric  metric
+	Title    string
+	Servers  servers
+	Settings settings
+	API      api
+	Metric   metric
+	Rest     rest
+}
+
+// Gettslist channel struct
+type Gettslist struct {
+	jobid string
+	list  []string
+}
+
+// Getrollup channel struct
+type Getrollup struct {
+	jobid  string
+	rollup []Rollup
 }
 
 // servers
@@ -85,10 +101,25 @@ type api struct {
 	SuggestMax    string
 	LookupLimit   string
 	LookupUseMeta string
-	HoursPast     int
-	Batch         int
-	ReadWorkers   int
-	WriteWorkers  int
+}
+
+// settings
+type settings struct {
+	HoursPast    int
+	Batch        int
+	ReadWorkers  int
+	WriteWorkers int
+	Interval     string
+	LogLevel     int
+}
+
+// rest
+type rest struct {
+	Debug            bool
+	Timeout          int
+	RetryCount       int
+	RetryWaitTime    int
+	RetryMaxWaitTime int
 }
 
 // metric
