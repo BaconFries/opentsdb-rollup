@@ -19,9 +19,9 @@ var wait = sync.WaitGroup{}
 var from = flag.String("from", "", "start of window.")
 var to = flag.String("to", "", "end of window.")
 var window = flag.Int("window", 0, "window size.")
-var getrollup = make(chan Getrollup, 500)
-var gettslist = make(chan Gettslist, 500)
-var getmetrics = make(chan string, 500)
+var getrollup = make(chan Getrollup, 400)
+var gettslist = make(chan Gettslist, 300)
+var getmetrics = make(chan string, 300)
 var config tomlConfig
 
 // NewRoundRobin server list
@@ -48,7 +48,7 @@ func (r *RoundRobin) Get() string {
 func GetMetrics(rr *RoundRobin, wait *sync.WaitGroup) {
 	defer wait.Done()
 	for _, metric := range config.Metric.List {
-
+		time.Sleep(25 * time.Millisecond)
 		uri := rr.Get() + "/api/suggest"
 		resp, err := resty.R().
 			SetQueryParams(map[string]string{
@@ -77,23 +77,22 @@ func GetMetrics(rr *RoundRobin, wait *sync.WaitGroup) {
 func GetTSList(rr *RoundRobin, wait *sync.WaitGroup) {
 	defer wait.Done()
 	for metric := range getmetrics {
+		time.Sleep(25 * time.Millisecond)
 		if config.Settings.LogLevel >= 4 {
 			log.Println("GetTSList: ", metric)
 		}
 		uri := rr.Get() + "/api/search/lookup"
+		jsondata := `{"metric":"` + metric + `","tags":[{"key":"host","value":"*"}],"useMeta":` + config.API.LookupUseMeta + `,"limit":` + config.API.LookupLimit + `}`
+
 		resp, err := resty.R().
 			SetResult(&Lookup{}).
-			SetQueryParams(map[string]string{
-				"useMeta": config.API.LookupUseMeta,
-				"limit":   config.API.LookupLimit,
-				"m":       metric,
-			}).
-			Get(uri)
+			SetBody(jsondata).
+			Post(uri)
 		if err != nil {
 			log.Printf("GetTSList: Error %v", err)
 		}
 		tslist := resp.Result().(*Lookup)
-
+		fmt.Printf("GetTSList total results %s: %d\n", metric, tslist.TotalResults)
 		if tslist != nil {
 			for i := 0; i < len(tslist.Results); i += config.Settings.Batch {
 				var k []string
@@ -115,8 +114,8 @@ func GetTSList(rr *RoundRobin, wait *sync.WaitGroup) {
 func GetRollup(endTime int64, startTime int64, interval string, rr *RoundRobin, wait *sync.WaitGroup) {
 	defer wait.Done()
 	for tsuid := range gettslist {
-		//fmt.Println("capacity is", cap(gettslist))
-		//fmt.Println("length is", len(gettslist))
+		//fmt.Println("gettslist capacity is", cap(gettslist))
+		//fmt.Println("gettslist length is", len(gettslist))
 		//fmt.Printf("getrollup tsuid: %v\n", tsuid)
 
 		var jsondata Query
@@ -124,14 +123,12 @@ func GetRollup(endTime int64, startTime int64, interval string, rr *RoundRobin, 
 		jsondata.Start = startTime
 		jsondata.End = endTime
 		queries.Aggregator = "none"
-		queries.Downsample = interval + "-count"
+		queries.Downsample = interval + "-avg"
 		for _, chunk := range tsuid.list {
 			queries.Tsuids = append(queries.Tsuids, chunk)
 		}
 		jsondata.Queries = append(jsondata.Queries, queries)
-		queries.Downsample = interval + "-sum"
-		jsondata.Queries = append(jsondata.Queries, queries)
-
+		time.Sleep(480 * time.Millisecond)
 		uri := rr.Get() + "/api/query"
 		resp, err := resty.R().
 			SetResult(&QueryRespItem{}).
@@ -140,6 +137,7 @@ func GetRollup(endTime int64, startTime int64, interval string, rr *RoundRobin, 
 		if err != nil {
 			log.Printf("GetRollup: Job ID %s Error %v", tsuid.jobid, err)
 		}
+		time.Sleep(25 * time.Millisecond)
 		result := resp.Result().(*QueryRespItem)
 		//fmt.Println(result)
 		if len(*result) != 0 {
@@ -160,17 +158,14 @@ func GetRollup(endTime int64, startTime int64, interval string, rr *RoundRobin, 
 func convertRollup(in *QueryRespItem, interval string) []Rollup {
 	var temp Rollup
 	var result []Rollup
-	a := len(*in) / 2
-	for i, item := range *in {
-		agg := "SUM"
-		if i < a {
-			agg = "COUNT"
-		}
+
+	for _, item := range *in {
 		for dps, value := range item.Dps {
-			temp.Aggregator = agg
-			temp.Interval = interval
 			temp.Metric = item.Metric
 			temp.Tags = item.Tags
+			if _, ok := temp.Tags["_aggregate"]; ok {
+				delete(temp.Tags, "_aggregate")
+			}
 			temp.Timestamp = dps
 			temp.Value = value
 			result = append(result, temp)
@@ -183,7 +178,8 @@ func convertRollup(in *QueryRespItem, interval string) []Rollup {
 func PostRollup(wr *RoundRobin, wait *sync.WaitGroup) {
 	defer wait.Done()
 	for data := range getrollup {
-		uri := wr.Get() + "/api/rollup?summary"
+		//fmt.Println("DATA ROLLUP: ", data.rollup)
+		uri := wr.Get() + "/api/put?summary"
 		resp, err := resty.R().
 			SetResult(&RollupResponse{}).
 			SetBody(data.rollup).
@@ -220,7 +216,6 @@ func GetTSListWorkerPool(noOfWorkers int, rr *RoundRobin, wait *sync.WaitGroup) 
 
 //GetRollupWorkerPool spawns workers
 func GetRollupWorkerPool(noOfWorkers int, endTime int64, startTime int64, interval string, rr *RoundRobin, wait *sync.WaitGroup) {
-
 	var wg sync.WaitGroup
 	for i := 0; i < noOfWorkers; i++ {
 		wg.Add(1)

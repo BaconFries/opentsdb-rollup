@@ -30,12 +30,12 @@ type Lookup struct {
 
 // Rollup payload struct
 type Rollup struct {
-	Aggregator string            `json:"aggregator"`
-	Timestamp  string            `json:"timestamp"`
-	Value      float64           `json:"value"`
-	Metric     string            `json:"metric"`
-	Interval   string            `json:"interval"`
-	Tags       map[string]string `json:"tags"`
+	//Aggregator string            `json:"aggregator"`
+	Timestamp string  `json:"timestamp"`
+	Value     float64 `json:"value"`
+	Metric    string  `json:"metric"`
+	//Interval   string            `json:"interval"`
+	Tags map[string]string `json:"tags"`
 }
 
 // SubQuery data to rollup

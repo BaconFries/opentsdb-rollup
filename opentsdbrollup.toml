@@ -2,25 +2,24 @@ title = "rollup config"
 
 [servers]
 WriteEndpoint = [
-  "http://hdmn1:4242",
-  "http://hdmn3.lon1.defense.net:4242"
+  "http://tsdb1:4242"
 ]
 ReadEndpoint  = [
-  "http://hdmn2:4242"
+  "http://tsdb2:4242",
 ]
 
 [api]
 SuggestMax    = "5000"
-LookupLimit   = "500000"
-LookupUseMeta = "true"
+LookupLimit   = "1"
+LookupUseMeta = "false"
 
 [settings]
 HoursPast     = -1
-Batch         = 100
-ReadWorkers   = 10
-WriteWorkers  = 10
+Batch         = 14
+ReadWorkers   = 5
+WriteWorkers  = 4
 Interval      = "1h"
-LogLevel      = 2
+LogLevel      = 5
 
 [rest]
 Debug            = false
@@ -31,24 +30,6 @@ RetryMaxWaitTime = 120    # seconds
 
 [metric]
 List          = [
- #'elastic.process.cpu.total',
- #'elastic.jvm.mem.heap',
- #'elastic.indices.cluster.segments'
-  # 'linux',
-   'ntp'
-  # 'os',
-  # 'pdns',
-  # 'redis',
-  # 'scollector',
-  # 'tsd'
+'cpu',
 ]
 
-
-
-
-#[metric]
-#List = [
-#'virtual_server',
-#'profile_http',
-#'profile_clientssl'
-#  ]
